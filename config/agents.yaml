@@ -1,0 +1,72 @@
+
+# Configure the embedding model
+embeddings:
+ - name: voyage_embeddings
+   provider: voyageai
+   model_name: voyage-3.5-lite
+   additional_kwargs:
+    output_dimension: 512
+ - name: bedrock-titan
+   provider: bedrock
+   model_name: amazon.titan-embed-text-v1
+
+# Configure the language model
+llms:
+  - name: claude-3.5
+    provider: bedrock
+    model_name: anthropic.claude-3-5-sonnet-20240620-v1:0
+    temperature: 0.7
+    max_tokens: 4096
+
+
+# Configure agent tools
+tools:
+  - name: product_availability
+    tool_type: full_text_search
+    description: Checks product availability of the product in the MongoDB database
+    connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+    namespace: dr_reddys.product_inventory
+    additional_kwargs:
+      index_name: full_text_search_index
+      text_field: search_text
+      top_k: 5
+  - name: product_information
+    tool_type: vector_search
+    description: Searches for relevant documents in the vector store to help with FAQ on dr reddys product information
+    connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+    namespace: dr_reddys.product_info
+    embedding_model: voyage_embeddings  # Reference to the embedding model defined above
+    additional_kwargs:
+      index_name: vector_index
+      top_k: 3
+      min_score: 0.7
+  - name: ai-memory
+    tool_type: mcp
+    description: MongoDB MCP Toolkit for advanced data operations
+    servers_config:
+      "ai-memory":
+        url: "http://localhost:8080/mcp"
+        transport: "streamable_http"
+        filter:
+          - store_memory
+          - retrieve_memory
+          - semantic_cache_response
+  
+
+# Configure checkpointing
+checkpointer:
+  connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+  db_name: dr_reddy_agent_state
+  collection_name: checkpoints
+  name: rag_agent_checkpointer
+
+# Configure the agent
+agent:
+  name: rag_react_agent
+  agent_type: react
+  llm: claude-3.5  # Reference to the LLM defined above
+  tools:
+    - product_information  # Reference to the tool defined above
+    - product_availability
+    - ai-memory  
+  system_prompt_path: ./prompts/rag_system_prompt.txt
