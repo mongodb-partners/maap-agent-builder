@@ -2,9 +2,14 @@ import os
 import re
 from copy import deepcopy
 from typing import Any, Dict, List, Optional, Union
+import asyncio
 
 import yaml
-from pipe21 import Map, Pipe
+try:
+    from pipe21 import Map, Pipe  # type: ignore
+    _PIPE21_AVAILABLE = True
+except Exception:  # pragma: no cover
+    _PIPE21_AVAILABLE = False
 from pydantic import BaseModel, create_model
 
 from agent_builder.agents.loader import AgentConfig, load_agent
@@ -32,11 +37,15 @@ def parse_response_model(response_dict: dict) -> BaseModel:
     Returns:
         BaseModel: A Pydantic model instance.
     """
-    response_dict = (
-        list(response_dict.items())
-        | Map(lambda item: (item[0], tuple(item[1])))
-        | Pipe(dict)
-    )
+    if _PIPE21_AVAILABLE:
+        response_dict = (
+            list(response_dict.items())
+            | Map(lambda item: (item[0], tuple(item[1])))
+            | Pipe(dict)
+        )
+    else:
+        # Fallback without pipe21
+        response_dict = {k: tuple(v) for k, v in response_dict.items()}
     return create_model("ResponseModel", **response_dict)
 
 
@@ -193,3 +202,15 @@ def load_application(config_path: str):
 
     logger.info("Application components loaded successfully")
     return result
+
+
+async def async_load_application(config_path: str):
+    """Async wrapper for load_application.
+
+    Currently delegates to the synchronous implementation in a thread executor.
+    This preserves API compatibility while allowing callers in an async
+    context to avoid blocking the event loop when YAML configs become large
+    or future loaders perform network I/O.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, load_application, config_path)

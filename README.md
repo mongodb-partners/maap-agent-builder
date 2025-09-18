@@ -60,12 +60,6 @@ make dev          # For development installation
 make verify       # Verify your installation is working correctly
 ```
 
-### Project Structure
-
-The project uses a modern Python packaging structure with `pyproject.toml`:
-
-- **Core Dependencies**: All main dependencies are defined in `pyproject.toml`
-- **Development Dependencies**: Available as optional extras via `[dev]`
 - **Configuration**: Tool configurations for black, isort, mypy, pytest, and ruff are included
 
 ### Development Setup
@@ -100,6 +94,119 @@ make add-tool
 ```
 
 These commands provide interactive prompts to help you create properly structured configuration files without having to manually edit YAML.
+
+## Async & Streaming API
+
+In addition to the standard Flask app (`app.py`), the project now includes an async/streaming server implemented with Quart: `agent_builder/async_app.py`.
+
+### Start Async Server
+python agent_builder/async_app.py --config agent_builder/agents.yaml --port 8000
+```
+
+### Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health/status including async & streaming capability flags |
+| `/chat` | POST | Async chat (returns full response) |
+| `/chat/stream` | POST | Server-Sent Events (SSE) streaming response |
+| `/reset` | POST | Reset chat history (all or specific thread) |
+| `/threads` | GET | List active thread IDs |
+
+### Request /chat
+
+```bash
+curl -s -X POST http://localhost:8000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Hello async world", "config": {"thread_id": "demo-thread"}}' | jq
+```
+
+### Streaming /chat/stream (SSE)
+
+```bash
+curl -N -X POST http://localhost:8000/chat/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Stream this please", "config": {"thread_id": "stream-thread"}}'
+```
+
+Events are emitted as `data: {json}\n\n` frames. Types:
+- `start` – stream started (contains thread_id)
+- `message` – intermediate chunk (when underlying agent supports incremental streaming)
+- `chunk` – generic chunk fallback
+- `final` – final synthesized response (when no true streaming available)
+- `end` – stream completion
+- `error` – error payload
+
+### Response Shape (/chat)
+
+```json
+{
+  "response": "Assistant reply text",
+  "history": [["user", "..."], ["assistant", "..."]],
+  "thread_id": "demo-thread"
+}
+```
+
+### Threading & History
+
+Provide a stable `thread_id` in `config.thread_id` to maintain conversation state. If omitted, a new UUID is generated and returned.
+
+To reset a thread:
+
+```bash
+curl -X POST http://localhost:8000/reset -H 'Content-Type: application/json' -d '{"thread_id": "demo-thread"}'
+```
+
+List threads:
+
+```bash
+curl http://localhost:8000/threads
+```
+
+### Programmatic Usage
+
+```python
+from agent_builder.async_app import AsyncAgentApp
+
+# Inject an already constructed agent (bypasses YAML load)
+app_wrapper = AsyncAgentApp(config_path="agent_builder/agents.yaml", agent=my_agent)
+quart_app = app_wrapper.app
+```
+
+### Testing
+
+An async test suite (`tests/test_async_app.py`) provides examples of:
+- Creating an injected dummy async agent
+- Testing /health, /chat, /chat/stream with Quart's async test client
+
+Run tests:
+
+```bash
+pytest -q tests/test_async_app.py
+```
+
+### Fallback Behavior
+
+If the underlying agent does not implement real streaming (`astream`), the server will:
+1. Execute a regular async invoke (or run sync invoke in a thread pool)
+2. Emit a single `final` event frame containing the response
+
+### Feature Detection
+
+`/health` returns:
+
+```json
+{
+  "status": "healthy",
+  "agent_loaded": true,
+  "supports_async": true,
+  "supports_streaming": true
+}
+```
+
+`supports_streaming` is true if the agent exposes `astream` or `stream`.
+
+---
 
 ## Configuration
 

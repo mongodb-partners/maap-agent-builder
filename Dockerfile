@@ -27,10 +27,11 @@ RUN groupadd -r appuser && useradd -r -g appuser -m -d /home/appuser appuser
 COPY pyproject.toml setup.py README.md ./
 
 # Set environment variables
-ENV PYTHONPATH=/app
-ENV PYTHONUNBUFFERED=1
-ENV AGENT_CONFIG_PATH=/app/config/agents.yaml
-ENV LOG_LEVEL=INFO
+ENV PYTHONPATH=/app \
+    PYTHONUNBUFFERED=1 \
+    AGENT_CONFIG_PATH=/app/config/agents.yaml \
+    LOG_LEVEL=INFO \
+    SERVER_MODE=sync
 
 # Create necessary directories
 RUN mkdir -p /app/config /app/logs /app/prompts
@@ -63,9 +64,8 @@ USER appuser
 # Expose the port the app runs on
 EXPOSE 5000
 
-# Add healthcheck to verify python process is running
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-  CMD ps aux | grep "[p]ython -m agent_builder.cli" || exit 1
+# Add healthcheck (HTTP based for reliability)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=8s --retries=3 CMD curl -fsS http://localhost:5000/health || exit 1
 
-# Command to run the application with proper error handling
-CMD ["/app/startup.sh"]
+# Command selector: if SERVER_MODE=async use async_app, else legacy startup script
+ENTRYPOINT ["/bin/bash", "-lc", "if [ \"$SERVER_MODE\" = \"async\" ]; then echo 'Starting Async Quart server'; python agent_builder/async_app.py --config $AGENT_CONFIG_PATH --host 0.0.0.0 --port 5000; else echo 'Starting Sync Flask server'; /app/startup.sh; fi"]

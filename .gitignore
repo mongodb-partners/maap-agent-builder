@@ -32,6 +32,7 @@ instance/
 flask_session/
 
 # Virtual Environment
+.venv/
 venv/
 ENV/
 env/

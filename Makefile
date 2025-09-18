@@ -26,8 +26,10 @@ help:
 	@echo "  make clean           Remove build artifacts and cache directories"
 	@echo "  make docker-build    Build Docker image"
 	@echo "  make docker-run      Run Docker container"
+	@echo "  make docker-run-async Run Docker container (async server)"
 	@echo "  make docker-debug    Start Docker container in interactive mode for debugging"
 	@echo "  make run             Run the agent server using local configuration"
+	@echo "  make run-async       Run the async (Quart) server locally"
 	@echo "  make serve           Alias for 'make run'"
 	@echo "  make verify          Verify the installation and configuration"
 	@echo "  make reinstall       Reinstall the package after name changes"
@@ -211,6 +213,23 @@ docker-run:
 		-e AGENT_CONFIG_PATH=/app/config/agents.yaml \
 		$(PROJECT_NAME)
 
+	# Run container with async server
+	docker-run-async:
+		@echo "Running Docker container (async server)..."
+		@if [ ! -f .env ]; then \
+			echo "Warning: .env file not found. Environment variables will not be loaded."; \
+			echo "You may want to copy .env.example to .env and configure it."; \
+		fi
+		docker run -p 5000:5000 \
+			-v $(PWD)/$(CONFIG_DIR):/app/config \
+			-v $(PWD)/$(LOGS_DIR):/app/logs \
+			-v $(PWD)/prompts:/app/prompts \
+			$(if $(wildcard .env),--env-file .env,) \
+			-e PYTHONPATH=/app \
+			-e AGENT_CONFIG_PATH=/app/config/agents.yaml \
+			-e SERVER_MODE=async \
+			$(PROJECT_NAME)
+
 # Run the agent server
 run:
 	@echo "Running MAAP Agent Builder server..."
@@ -220,6 +239,15 @@ run:
 	fi
 	export AGENT_CONFIG_PATH=$(CONFIG_PATH) && \
 	python -m agent_builder.cli serve --config $(CONFIG_PATH) --port 5000
+
+run-async:
+	@echo "Running MAAP Agent Builder ASYNC (Quart) server..."
+	@if [ ! -f $(CONFIG_PATH) ]; then \
+		echo "Configuration file not found at $(CONFIG_PATH). Creating default configuration..."; \
+		make create-config; \
+	fi
+	PYTHONPATH=. SERVER_MODE=async AGENT_CONFIG_PATH=$(CONFIG_PATH) \
+		python agent_builder/async_app.py --config $(CONFIG_PATH) --port 5000
 
 # Alias for run
 serve: run

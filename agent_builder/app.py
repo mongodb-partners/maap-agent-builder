@@ -5,12 +5,14 @@ This module provides the main web application for the MAAP Agent Builder,
 handling agent initialization, request routing, and chat history management.
 """
 
+import asyncio
+import json
 import os
 import uuid
 from typing import Any, Dict, Optional
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, session
+from flask import Flask, jsonify, request, session, Response
 
 from agent_builder.utils.logging_config import get_logger
 from agent_builder.yaml_loader import load_application
@@ -69,6 +71,35 @@ class AgentApp:
             logger.error("Failed to load application components: %s", str(e))
             raise
 
+    def _invoke_agent_sync(self, input_data: Dict, config: Dict) -> Any:
+        """
+        Synchronous agent invocation wrapper.
+        
+        Args:
+            input_data: Input data for the agent
+            config: Configuration for the agent
+            
+        Returns:
+            Agent response
+        """
+        try:
+            if hasattr(self.agent, "invoke"):
+                return self.agent.invoke(input_data, config=config)
+            else:
+                # Legacy agent format fallback
+                return self.agent(input_data.get("messages", [])[-1][1])
+        except Exception as e:
+            logger.exception("Error in sync agent invocation: %s", str(e))
+            raise
+
+    def _has_async_support(self) -> bool:
+        """Check if the agent supports async operations."""
+        return hasattr(self.agent, "ainvoke") or hasattr(self.agent, "astream")
+
+    def _has_streaming_support(self) -> bool:
+        """Check if the agent supports streaming."""
+        return hasattr(self.agent, "stream") or hasattr(self.agent, "astream")
+
     def register_routes(self):
         """Register API routes for the Flask application."""
 
@@ -76,7 +107,12 @@ class AgentApp:
         def health():
             """Health check endpoint."""
             if self.agent:
-                return jsonify({"status": "healthy", "agent_loaded": True})
+                return jsonify({
+                    "status": "healthy", 
+                    "agent_loaded": True,
+                    "supports_async": self._has_async_support(),
+                    "supports_streaming": self._has_streaming_support()
+                })
             return jsonify({"status": "unhealthy", "agent_loaded": False}), 503
 
         @self.app.route("/chat", methods=["POST"])
