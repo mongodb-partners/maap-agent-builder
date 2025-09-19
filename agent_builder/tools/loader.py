@@ -35,6 +35,7 @@ class ToolType(str, Enum):
     NL_TO_MQL = "nl_to_mql"  # Natural language to MongoDB Query Language
     MCP = "mcp"  # Model Context Protocol tools
     FULL_TEXT_SEARCH = "full_text_search"  # Text search in MongoDB
+    HANDOFF = "handoff"  # Swarm handoff tool for multi-agent routing
 
 
 @dataclass
@@ -66,6 +67,8 @@ class ToolConfig:
     llm: Optional[BaseLLM] = None
     servers_config: Optional[Dict[str, Dict[str, Any]]] = None
     additional_kwargs: Optional[Dict[str, Any]] = field(default_factory=dict)
+    # For handoff tools (langgraph-swarm) we need the target agent name
+    agent_name: Optional[str] = None
 
 
 def load_tool(config: ToolConfig) -> BaseTool:
@@ -157,6 +160,32 @@ def load_tool(config: ToolConfig) -> BaseTool:
 
         # Get full text search tool
         return mongodb_tools.get_full_text_search_tool()
+
+    elif tool_type == ToolType.HANDOFF:
+        # Lazy import so dependency is only required when using this tool type
+        try:
+            from langgraph_swarm import create_handoff_tool  # type: ignore
+        except ImportError as e:  # pragma: no cover - dependency warning path
+            raise ImportError(
+                "Handoff tool requires 'langgraph-swarm' package. Install with: pip install langgraph-swarm"
+            ) from e
+
+        if not config.agent_name:
+            raise ValueError(
+                "Handoff tool configuration requires 'agent_name' field specifying the target agent"
+            )
+
+        # Map our config: use provided tool name (or default) & description; pass through any additional kwargs
+        handoff_tool = create_handoff_tool(
+            agent_name=config.agent_name,
+            name=tool_name,
+            description=config.description,
+            **(config.additional_kwargs or {}),
+        )
+        logger.info(
+            "Created handoff tool '%s' targeting agent '%s'", tool_name, config.agent_name
+        )
+        return handoff_tool
 
     else:
         logger.error("Unsupported tool type: %s", tool_type)

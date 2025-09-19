@@ -290,6 +290,20 @@ agent:
   tools:
     - product_recommender  # Reference to the tool defined above
   system_prompt_path: ./prompts/rag_system_prompt.txt
+  
+# Example handoff tool (multi-agent swarm)
+# Add this inside the tools list when using multiple agents with langgraph-swarm
+# tools:
+#   - name: to_planner
+#     tool_type: handoff
+#     description: Handoff control to the planning agent
+#     agent_name: planner   # target agent's name
+#   - name: to_react
+#     tool_type: handoff
+#     description: Give control back to the react helper
+#     agent_name: react_helper
+
+# Then include the appropriate handoff tools in each agent's tools array so they can transfer control.
 ```
 
 ### Multi-Agent Configuration
@@ -315,6 +329,144 @@ agents:
     system_prompt: "You plan tasks step by step before answering."
 
 default_agent: planner
+
+### Swarm Configuration (Separate Or Embedded)
+
+You can declaratively build a LangGraph Swarm (multi-agent workflow with active-agent routing) by adding a `swarm` block to the same YAML, or by creating a dedicated swarm config file that includes agents plus the block.
+
+Example (embedded in main config):
+
+```yaml
+llms:
+  - name: base_llm
+    provider: fireworks
+    model_name: accounts/fireworks/models/llama4-maverick-instruct-basic
+    temperature: 0.1
+
+agents:
+  - name: researcher
+    agent_type: react
+    llm: base_llm
+    system_prompt: "You gather facts and cite sources succinctly."
+    tools: [to_writer]
+  - name: writer
+    agent_type: react
+    llm: base_llm
+    system_prompt: "You compose clear narrative answers. Use to_researcher when you lack facts."
+    tools: [to_researcher]
+
+tools:
+  - name: to_writer
+    tool_type: handoff
+    description: Handoff to writing agent to synthesize answer
+    agent_name: writer
+  - name: to_researcher
+    tool_type: handoff
+    description: Return to researcher for more facts
+    agent_name: researcher
+
+swarm:
+  agents: [researcher, writer]
+  default_active_agent: researcher
+  # optional swarm-level checkpointer override
+  # checkpointer:
+  #   type: mongodb
+  #   connection_str: ${MONGODB_URI}
+  #   db_name: agent_state
+  #   collection_name: swarm_ckpts
+  #   name: swarm_checkpointer
+  # use_global_checkpointer: true
+```
+
+Programmatic usage:
+
+```python
+from agent_builder.swarm_loader import load_swarm_application
+components = load_swarm_application("agents.yaml")
+swarm = components["swarm"]  # compiled app
+result = swarm.invoke({"messages": [("user", "Draft a summary of quantum tunneling")]},
+                      config={"configurable": {"thread_id": "thread-1"}})
+```
+
+Returned dictionary keys when `swarm` block is present:
+- `swarm_workflow`: the uncompiled workflow object
+- `swarm`: compiled (invoke/astream capable) graph
+- `swarm_config`: minimal metadata (agents, default, has_checkpointer)
+
+Checkpointer precedence inside swarm loading:
+1. `swarm.checkpointer` (if provided)
+2. Top-level `checkpointer` (if `use_global_checkpointer` true or omitted)
+3. In-memory checkpointer fallback
+
+If `langgraph-swarm` is missing while a `swarm` block is defined, loader raises a clear ImportError.
+
+### Pharma Sales Swarm Example
+
+An end-to-end pharmaceutical multi-agent swarm example is provided:
+
+Files:
+- `config/pharma_sales_swarm.yaml` – multi-agent + handoff + swarm block
+- `examples/pharma_sales_swarm_example.py` – runnable script
+
+Run (ensure relevant API keys & MongoDB URI set):
+
+```bash
+export FIREWORKS_API_KEY=your_key
+export VOYAGE_API_KEY=your_key
+export MONGODB_URI="mongodb+srv://user:pass@cluster/"
+
+python examples/pharma_sales_swarm_example.py \
+  --config config/pharma_sales_swarm.yaml \
+  --thread-id demo-thread-1
+```
+
+To only validate loading without invoking LLM calls:
+
+```bash
+python examples/pharma_sales_swarm_example.py --skip-demo
+```
+
+The swarm routes between a `product_researcher` and `inventory_specialist` using handoff tools to separate clinical vs. logistical queries.
+
+### Handoff Tool Type
+
+You can enable explicit intra-agent control transfer using the built-in `handoff` tool type backed by `langgraph-swarm`'s `create_handoff_tool`.
+
+YAML snippet:
+
+```yaml
+tools:
+  - name: to_planner
+    tool_type: handoff
+    description: Handoff to the planning agent
+    agent_name: planner
+  - name: to_react
+    tool_type: handoff
+    description: Return to the reactive helper
+    agent_name: react_helper
+
+agents:
+  - name: react_helper
+    agent_type: react
+    llm: base_llm
+    tools: [to_planner]
+    system_prompt: |
+      You are a quick reactive assistant. Use the to_planner tool when a multi-step plan is required.
+  - name: planner
+    agent_type: plan_execute_replan
+    llm: base_llm
+    tools: [to_react]
+    system_prompt: |
+      You create structured step-by-step plans. Use to_react to delegate execution or simple Q&A.
+
+default_agent: react_helper
+```
+
+Notes:
+1. Each handoff tool requires `agent_name` (the destination agent).
+2. `name` becomes the tool name exposed to the source agent LLM.
+3. Optional fields can be added later via `additional_kwargs` to pass through to `create_handoff_tool` (e.g., custom instructions) – put them under `additional_kwargs:` in the tool config.
+4. Ensure `langgraph-swarm` is installed (`pip install langgraph-swarm`). If missing, the loader raises a clear error.
 ```
 
 Backward compatibility: existing single `agent:` schema still works. When using `agents:`, the loader populates:

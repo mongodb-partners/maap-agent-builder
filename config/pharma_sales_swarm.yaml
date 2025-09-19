@@ -1,0 +1,109 @@
+#===================================
+# Dr. Reddy's Pharma Sales Swarm - Configuration
+# Demonstrates multi-agent swarm with handoff tools
+#===================================
+
+# Embedding model (vector search for product info)
+embeddings:
+  - name: voyage_embeddings
+    provider: voyageai
+    model_name: voyage-3.5-lite
+    additional_kwargs:
+      output_dimension: 512
+
+# LLM (choose one provider you have credentials for)
+llms:
+  - name: fireworks_llm
+    provider: fireworks
+    # model_name: accounts/fireworks/models/llama4-maverick-instruct-basic
+    model_name: accounts/fireworks/models/qwen3-235b-a22b-instruct-2507
+    temperature: 0.2
+    max_tokens: 3000
+    streaming: false
+
+# Tools
+# 1) Vector search for detailed product information (unstructured PDFs)
+# 2) Full text (or keyword) search for inventory / structured queries
+# 3) Memory MCP (optional, comment out if not running memory MCP server)
+# 4) Handoff tools for agent routing
+tools:
+  - name: product_information
+    tool_type: vector_search
+    description: Retrieve detailed pharmaceutical product documentation passages
+    connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+    namespace: dr_reddys.product_info
+    embedding_model: voyage_embeddings
+    additional_kwargs:
+      index_name: vector_index
+      top_k: 4
+      min_score: 0.65
+
+  - name: product_availability
+    tool_type: full_text_search
+    description: Look up product availability and inventory related facts
+    connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+    namespace: dr_reddys.product_inventory
+    additional_kwargs:
+      index_name: full_text_search_index
+      text_field: search_text
+      top_k: 5
+
+  # - name: ai-memory
+  #   tool_type: mcp
+  #   description: Conversational & semantic memory operations (optional)
+  #   servers_config:
+  #     ai-memory:
+  #       url: "http://localhost:8080/mcp"
+  #       transport: streamable_http
+  #       filter:
+  #         - store_memory
+  #         - retrieve_memory
+  #         - semantic_cache_response
+
+  # Handoff tools (each targets another agent by name)
+  - name: to_inventory
+    tool_type: handoff
+    description: Handoff to inventory specialist for stock / logistics
+    agent_name: inventory_specialist
+
+  - name: to_researcher
+    tool_type: handoff
+    description: Return to product researcher for deeper product facts
+    agent_name: product_researcher
+
+# Global checkpointing (optional - enables multi-turn continuity & memory persistence)
+checkpointer:
+  connection_str: ${MONGODB_URI:-mongodb://localhost:27017}
+  db_name: dr_reddys_swarm_state
+  collection_name: checkpoints
+  name: swarm_checkpointer
+
+# Agents
+agents:
+  - name: product_researcher
+    agent_type: react
+    llm: fireworks_llm
+    tools:
+      - product_information
+      - to_inventory
+    system_prompt: |
+      You are a pharmaceutical product researcher. Provide concise, clinically accurate product information.
+      When the user needs inventory, distribution, logistics, pricing or fulfillment details, CALL the to_inventory tool.
+      Always cite authoritative product documentation snippets when possible.
+
+  - name: inventory_specialist
+    agent_type: react
+    llm: fireworks_llm
+    tools:
+      - product_availability
+      - to_researcher
+    system_prompt: |
+      You specialize in product availability, inventory levels, distribution centers, batch and logistics info.
+      If the user asks for clinical / pharmacological / medical detail, CALL the to_researcher tool.
+      Summaries must be short; include center names and quantities when relevant.
+
+# Swarm block: enabling active agent routing workflow
+swarm:
+  agents: [product_researcher, inventory_specialist]
+  default_active_agent: product_researcher
+  use_global_checkpointer: true
