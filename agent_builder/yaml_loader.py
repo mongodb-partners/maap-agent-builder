@@ -171,8 +171,61 @@ def load_application(config_path: str):
         tool_configs = [ToolConfig(**tool) for tool in tools_config]
         result["tools"] = load_tools(tool_configs)
 
-    # Load agent with resolved references
-    if "agent" in config:
+    # Load multiple agents (new schema) or single agent (legacy schema)
+    if "agents" in config:
+        logger.info("Loading multiple agents")
+        agents_list = config["agents"]
+        if not isinstance(agents_list, list):
+            raise ValueError("'agents' section must be a list of agent definitions")
+
+        result["agents"] = {}
+        default_agent_name = config.get("default_agent")
+
+        for ag_cfg in agents_list:
+            agent_cfg = deepcopy(ag_cfg)
+            name = agent_cfg.get("name")
+            if not name:
+                raise ValueError("Each agent in 'agents' list must have a 'name'")
+
+            # Resolve LLM reference
+            if "llm" in agent_cfg and isinstance(agent_cfg["llm"], str):
+                if agent_cfg["llm"] not in result.get("llms", {}):
+                    logger.error(f"Referenced LLM '{agent_cfg['llm']}' not found for agent {name}")
+                    raise ValueError(
+                        f"Referenced LLM '{agent_cfg['llm']}' not found for agent {name}"
+                    )
+                agent_cfg["llm"] = result["llms"][agent_cfg["llm"]]
+
+            # Resolve tool references
+            if "tools" in agent_cfg and isinstance(agent_cfg["tools"], list):
+                resolved_tools = []
+                for tool_name in agent_cfg["tools"]:
+                    if tool_name not in result.get("tools", {}):
+                        logger.error(
+                            f"Referenced tool '{tool_name}' not found for agent {name}"
+                        )
+                        raise ValueError(
+                            f"Referenced tool '{tool_name}' not found for agent {name}"
+                        )
+                    resolved_tools.append(result["tools"][tool_name])
+                agent_cfg["tools"] = resolved_tools
+
+            # Apply global checkpointer if present and not overridden
+            if "checkpointer" in config and "checkpointer_config" not in agent_cfg:
+                agent_cfg["checkpointer_config"] = config["checkpointer"]
+
+            agent_config_obj = AgentConfig(**agent_cfg)
+            result["agents"][name] = load_agent(agent_config_obj)
+
+            if not default_agent_name:
+                default_agent_name = name  # first agent becomes default if not specified
+
+        result["default_agent_name"] = default_agent_name
+        # For backwards compatibility expose the default agent at 'agent'
+        if default_agent_name:
+            result["agent"] = result["agents"][default_agent_name]
+    elif "agent" in config:
+        # Legacy single agent path
         logger.info("Loading agent")
         agent_config = deepcopy(config["agent"])
 
@@ -199,6 +252,7 @@ def load_application(config_path: str):
         # Load the agent
         agent_config_obj = AgentConfig(**agent_config)
         result["agent"] = load_agent(agent_config_obj)
+        result["default_agent_name"] = agent_config.get("name", "default_agent")
 
     logger.info("Application components loaded successfully")
     return result

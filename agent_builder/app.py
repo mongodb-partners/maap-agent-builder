@@ -42,7 +42,9 @@ class AgentApp:
         self.app.config["PERMANENT_SESSION_LIFETIME"] = session_ttl
         self.config_path = config_path
         self.components = None
-        self.agent = None
+        self.agent = None  # The currently active (default) agent
+        self.agents = {}  # All loaded agents when multi-agent config provided
+        self.default_agent_name: Optional[str] = None
         self.chat_histories = {}  # Store chat histories by thread_id
 
         # Register routes
@@ -57,11 +59,17 @@ class AgentApp:
             logger.info("Loading application components from %s", self.config_path)
             self.components = load_application(self.config_path)
 
-            if "agent" not in self.components:
-                logger.error("No agent configured in the YAML file")
-                raise ValueError("No agent configured in the YAML file")
-
-            self.agent = self.components.get("agent")
+            # Multi-agent awareness
+            if "agents" in self.components:
+                self.agents = self.components["agents"]
+                self.default_agent_name = self.components.get("default_agent_name")
+                self.agent = self.components.get("agent")  # default alias
+            else:
+                if "agent" not in self.components:
+                    logger.error("No agent configured in the YAML file")
+                    raise ValueError("No agent configured in the YAML file")
+                self.agent = self.components.get("agent")
+                self.default_agent_name = self.components.get("default_agent_name")
             if not self.agent:
                 logger.error("Agent object not properly initialized")
                 raise ValueError("Failed to initialize agent")
@@ -108,10 +116,13 @@ class AgentApp:
             """Health check endpoint."""
             if self.agent:
                 return jsonify({
-                    "status": "healthy", 
+                    "status": "healthy",
                     "agent_loaded": True,
                     "supports_async": self._has_async_support(),
-                    "supports_streaming": self._has_streaming_support()
+                    "supports_streaming": self._has_streaming_support(),
+                    "multi_agent": bool(self.agents),
+                    "agents": list(self.agents.keys()) if self.agents else [self.default_agent_name] if self.default_agent_name else [],
+                    "default_agent": self.default_agent_name,
                 })
             return jsonify({"status": "unhealthy", "agent_loaded": False}), 503
 
@@ -146,8 +157,28 @@ class AgentApp:
                 # Get or initialize chat history for this thread
                 chat_history = self.chat_histories.get(thread_id, [])
 
+                # Agent selection (optional): config.agent_name or request arg
+                requested_agent_name = (
+                    config.get("agent_name")
+                    or request.args.get("agent")
+                    or None
+                )
+                active_agent = self.agent
+                if requested_agent_name:
+                    if requested_agent_name not in self.agents:
+                        return (
+                            jsonify(
+                                {
+                                    "error": f"Agent '{requested_agent_name}' not found",
+                                    "available_agents": list(self.agents.keys()),
+                                }
+                            ),
+                            400,
+                        )
+                    active_agent = self.agents[requested_agent_name]
+
                 # Prepare input for the agent
-                if hasattr(self.agent, "invoke"):
+                if hasattr(active_agent, "invoke"):
                     # For LangGraph agents
                     input_data = {"messages": chat_history + [("user", user_message)]}
 
@@ -158,7 +189,7 @@ class AgentApp:
 
                     try:
                         # Invoke the agent
-                        response = self.agent.invoke(input_data, config=config)
+                        response = active_agent.invoke(input_data, config=config)
 
                         # Process agent response
                         if isinstance(response, dict) and "messages" in response:
@@ -201,7 +232,7 @@ class AgentApp:
                     # Legacy agent format fallback
                     logger.warning("Using legacy agent format")
                     try:
-                        agent_response = str(self.agent(user_message))
+                        agent_response = str(active_agent(user_message))
                     except Exception as legacy_error:
                         logger.exception(
                             f"Error in legacy agent invocation: {str(legacy_error)}"

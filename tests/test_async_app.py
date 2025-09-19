@@ -4,6 +4,12 @@ import sys
 import pytest
 from typing import Any, Dict, List
 
+# Skip entire test file if Quart not installed
+try:  # pragma: no cover - environment dependent
+    import quart  # noqa: F401
+except ImportError:  # pragma: no cover - environment dependent
+    pytest.skip("Quart not installed; skipping async app tests", allow_module_level=True)
+
 # Ensure project root is on path
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:

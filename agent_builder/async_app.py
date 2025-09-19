@@ -58,7 +58,10 @@ class AsyncAgentApp:
         self.config_path = config_path
         self.session_ttl = session_ttl  # Store for potential future use
         self.components = None
-        # Allow directly providing an agent (useful for tests)
+        # Multi-agent containers
+        self.agents = {}
+        self.default_agent_name: Optional[str] = None
+        # Allow directly providing an agent (useful for tests); multi-agent injection not yet supported externally
         self.agent = agent
         self.chat_histories = {}  # Store chat histories by thread_id
 
@@ -77,11 +80,16 @@ class AsyncAgentApp:
             from agent_builder.yaml_loader import load_application  # type: ignore
             self.components = load_application(self.config_path)
 
-            if "agent" not in self.components:
-                logger.error("No agent configured in the YAML file")
-                raise ValueError("No agent configured in the YAML file")
-
-            self.agent = self.components.get("agent")
+            if "agents" in self.components:
+                self.agents = self.components["agents"]
+                self.default_agent_name = self.components.get("default_agent_name")
+                self.agent = self.components.get("agent")  # default alias
+            else:
+                if "agent" not in self.components:
+                    logger.error("No agent configured in the YAML file")
+                    raise ValueError("No agent configured in the YAML file")
+                self.agent = self.components.get("agent")
+                self.default_agent_name = self.components.get("default_agent_name")
             if not self.agent:
                 logger.error("Agent object not properly initialized")
                 raise ValueError("Failed to initialize agent")
@@ -196,7 +204,14 @@ class AsyncAgentApp:
         async def health():
             """Health check endpoint."""
             if self.agent:
-                return jsonify({"status": "healthy", "agent_loaded": True, "supports_async": True})
+                return jsonify({
+                    "status": "healthy",
+                    "agent_loaded": True,
+                    "supports_async": True,
+                    "multi_agent": bool(self.agents),
+                    "agents": list(self.agents.keys()) if self.agents else [self.default_agent_name] if self.default_agent_name else [],
+                    "default_agent": self.default_agent_name,
+                })
             return jsonify({"status": "unhealthy", "agent_loaded": False}), 503
 
         @self.app.route("/chat", methods=["POST"])
@@ -227,6 +242,21 @@ class AsyncAgentApp:
                 # Get or initialize chat history for this thread
                 chat_history = self.chat_histories.get(thread_id, [])
 
+                # Agent selection (optional)
+                requested_agent_name = (
+                    config.get("agent_name")
+                    or request.args.get("agent")
+                    or None
+                )
+                active_agent = self.agent
+                if requested_agent_name:
+                    if requested_agent_name not in self.agents:
+                        return jsonify({
+                            "error": f"Agent '{requested_agent_name}' not found",
+                            "available_agents": list(self.agents.keys())
+                        }), 400
+                    active_agent = self.agents[requested_agent_name]
+
                 # Prepare input for the agent
                 input_data = {"messages": chat_history + [("user", user_message)]}
 
@@ -237,7 +267,13 @@ class AsyncAgentApp:
 
                 try:
                     # Invoke the agent asynchronously
-                    response = await self._invoke_agent_async(input_data, config)
+                    # Temporarily swap self.agent for invocation to reuse existing method
+                    original_agent = self.agent
+                    try:
+                        self.agent = active_agent
+                        response = await self._invoke_agent_async(input_data, config)
+                    finally:
+                        self.agent = original_agent
 
                     # Process agent response
                     if isinstance(response, dict) and "messages" in response:
@@ -321,6 +357,21 @@ class AsyncAgentApp:
                 # Get or initialize chat history for this thread
                 chat_history = self.chat_histories.get(thread_id, [])
 
+                # Agent selection (optional)
+                requested_agent_name = (
+                    config.get("agent_name")
+                    or request.args.get("agent")
+                    or None
+                )
+                active_agent = self.agent
+                if requested_agent_name:
+                    if requested_agent_name not in self.agents:
+                        return jsonify({
+                            "error": f"Agent '{requested_agent_name}' not found",
+                            "available_agents": list(self.agents.keys())
+                        }), 400
+                    active_agent = self.agents[requested_agent_name]
+
                 # Prepare input for the agent
                 input_data = {"messages": chat_history + [("user", user_message)]}
 
@@ -334,8 +385,14 @@ class AsyncAgentApp:
                     yield f"data: {json.dumps({'type': 'start', 'thread_id': thread_id})}\n\n"
                     
                     full_response = ""
-                    async for chunk in self._stream_agent_response(input_data, config):
-                        yield chunk
+                    # Stream using selected agent (swap like above)
+                    original_agent = self.agent
+                    try:
+                        self.agent = active_agent
+                        async for chunk in self._stream_agent_response(input_data, config):
+                            yield chunk
+                    finally:
+                        self.agent = original_agent
                         
                         # Extract content from chunk for history
                         try:
