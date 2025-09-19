@@ -292,6 +292,63 @@ agent:
   system_prompt_path: ./prompts/rag_system_prompt.txt
 ```
 
+### Multi-Agent Configuration
+
+You can now register multiple agents in a single configuration file using the `agents` list. Specify a `default_agent` (falls back to the first listed if omitted):
+
+```yaml
+llms:
+  - name: base_llm
+    provider: fireworks
+    model_name: accounts/fireworks/models/llama4-maverick-instruct-basic
+    temperature: 0.2
+
+agents:
+  - name: react_helper
+    agent_type: react
+    llm: base_llm
+    system_prompt: "You are a helpful ReAct assistant."
+
+  - name: planner
+    agent_type: plan_execute_replan
+    llm: base_llm
+    system_prompt: "You plan tasks step by step before answering."
+
+default_agent: planner
+```
+
+Backward compatibility: existing single `agent:` schema still works. When using `agents:`, the loader populates:
+
+- `components['agents']` -> dict of name -> agent instance
+- `components['agent']` -> the default agent (alias)
+- `components['default_agent_name']`
+
+### Selecting an Agent at Runtime
+
+Use either a query parameter or `config.agent_name` in request body:
+
+```bash
+curl -X POST 'http://localhost:5000/chat?agent=react_helper' \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Hi", "config": {"thread_id": "t1"}}'
+
+curl -X POST http://localhost:5000/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message": "Plan this task", "config": {"thread_id": "t2", "agent_name": "planner"}}'
+```
+
+`/health` now returns:
+
+```json
+{
+  "status": "healthy",
+  "agent_loaded": true,
+  "multi_agent": true,
+  "agents": ["react_helper", "planner"],
+  "default_agent": "planner"
+}
+```
+
 You can create this configuration manually or use the provided Makefile targets:
 
 ```bash
