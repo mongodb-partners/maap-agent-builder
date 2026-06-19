@@ -11,7 +11,7 @@ MDB Agent Builder enables you to:
 - **Scale across workers** — Gunicorn multi-worker support with MongoDB-backed conversation state and checkpointing
 - **Add long-term memory** — episodic (verbatim) and observational (distilled) memory with MongoDB Atlas Vector Search
 - **Enforce governance** — access policies, prompt injection detection, PII redaction, and audit logging
-- **Integrate any LLM or tool** — pluggable adapters for Anthropic, Bedrock, Fireworks, Cohere, Grove, and 10+ other providers
+- **Integrate any LLM or tool** — pluggable adapters for Anthropic, Bedrock, Fireworks, Cohere, Google Gemini, Grove, and 10+ other providers
 - **Persist across restarts** — MongoDB checkpointing for durable graph and conversation state
 
 ---
@@ -20,7 +20,7 @@ MDB Agent Builder enables you to:
 
 - **Python 3.10+** (3.11 or 3.12 recommended)
 - **MongoDB** — local (`mongodb://localhost:27017`) or Atlas cluster
-- **An LLM provider** — one of: Anthropic, OpenAI, Bedrock, Fireworks, Cohere, Together, Azure, Ollama, SageMaker, or Grove
+- **An LLM provider** — one of: Anthropic, OpenAI, Bedrock, Fireworks, Cohere, Together, Azure, Google Gemini, Ollama, SageMaker, or Grove
 
 ---
 
@@ -366,6 +366,7 @@ FIREWORKS_API_KEY=...
 COHERE_API_KEY=...
 TOGETHER_API_KEY=...
 VOYAGEAI_API_KEY=...
+GOOGLE_API_KEY=...              # Google Gemini (LLM + embeddings); GEMINI_API_KEY also accepted
 
 # Azure OpenAI
 AZURE_OPENAI_API_KEY=...
@@ -407,6 +408,7 @@ Models are declared under `llms:` and referenced by name from agents.
 | `together` | `TOGETHER_API_KEY` | Together AI |
 | `cohere` | `COHERE_API_KEY` | Cohere |
 | `azure` | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT` | Azure OpenAI |
+| `google` / `gemini` | `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | Google Gemini (Google AI Studio). `max_tokens` maps to `max_output_tokens` |
 | `ollama` | None (local) | Local Ollama models. Defaults to `http://localhost:11434` |
 | `sagemaker` | `additional_kwargs.endpoint_name` | AWS SageMaker endpoints |
 | `grove` | `GROVE_API_BASE`, `GROVE_API_KEY` | Grove API gateway (OpenAI-compatible) |
@@ -426,11 +428,28 @@ llms:
     model_name: gpt-4o
     temperature: 0.3
 
+  - name: my-gemini
+    provider: google              # or the "gemini" alias
+    model_name: gemini-1.5-pro
+    temperature: 0.3
+    max_tokens: 2048              # forwarded as max_output_tokens
+    additional_kwargs:
+      api_key: ${GOOGLE_API_KEY}  # optional; falls back to GOOGLE_API_KEY / GEMINI_API_KEY env
+
   - name: local-llama
     provider: ollama
     model_name: llama3
     additional_kwargs:
       base_url: http://localhost:11434
+```
+
+Google Gemini embedding models use the same `google` / `gemini` provider name under `embeddings:`:
+
+```yaml
+embeddings:
+  - name: gemini-embed
+    provider: google
+    model_name: models/text-embedding-004
 ```
 
 #### Grove API Gateway
